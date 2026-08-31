@@ -1,0 +1,16 @@
+{
+  "IntervalHours": 24,
+  "MinimumWidth": 3840,
+  "MinimumHeight": 2160,
+  "HistoryLimit": 10,
+  "MaximumFileMegabytes": 25,
+  "MaximumAttempts": 5,
+  "WallhavenWeight": 70,
+  "NasaWeight": 30,
+  "WallhavenCategories": "110",
+  "AllowSketchy": false,
+  "AllowNsfw": false,
+  "NsfwOnly": false,
+  "WallhavenQuery": "",
+  "NasaQueries": [ "space", "earth", "nebula", "galaxy", "moon" ]
+}
