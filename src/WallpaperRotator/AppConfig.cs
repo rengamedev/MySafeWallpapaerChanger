@@ -1,9 +1,12 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace WallpaperRotator;
 
 public sealed class AppConfig
 {
+    public RotationSchedule Schedule { get; set; } = RotationSchedule.Daily;
+    public AutomaticRotationMode RotationMode { get; set; } = AutomaticRotationMode.Random;
     public int IntervalHours { get; set; } = 24;
     public int MinimumWidth { get; set; } = 3840;
     public int MinimumHeight { get; set; } = 2160;
@@ -21,6 +24,8 @@ public sealed class AppConfig
 
     public void Normalize()
     {
+        if (!Enum.IsDefined(Schedule)) Schedule = RotationSchedule.Daily;
+        if (!Enum.IsDefined(RotationMode)) RotationMode = AutomaticRotationMode.Random;
         // WinForms Timer.Interval is an Int32 number of milliseconds (about 24.8 days maximum).
         IntervalHours = Math.Clamp(IntervalHours, 1, 24 * 24);
         MinimumWidth = Math.Clamp(MinimumWidth, 800, 16384);
@@ -40,10 +45,21 @@ public sealed class AppConfig
 
 public sealed class ConfigStore(AppPaths paths, DiagnosticLog log)
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
+    private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
+    private readonly SemaphoreSlim gate = new(1, 1);
+
+    private static JsonSerializerOptions CreateJsonOptions()
+    {
+        var options = new JsonSerializerOptions { WriteIndented = true, PropertyNameCaseInsensitive = true };
+        options.Converters.Add(new JsonStringEnumConverter());
+        return options;
+    }
 
     public async Task<AppConfig> LoadAsync()
     {
+        await gate.WaitAsync();
+        try
+        {
         paths.EnsureCreated();
         AppConfig config;
         try
@@ -58,11 +74,20 @@ public sealed class ConfigStore(AppPaths paths, DiagnosticLog log)
             config = new();
         }
         config.Normalize();
-        await SaveAsync(config);
+        await SaveUnsafeAsync(config);
         return config;
+        }
+        finally { gate.Release(); }
     }
 
     public async Task SaveAsync(AppConfig config)
+    {
+        await gate.WaitAsync();
+        try { await SaveUnsafeAsync(config); }
+        finally { gate.Release(); }
+    }
+
+    private async Task SaveUnsafeAsync(AppConfig config)
     {
         config.Normalize();
         paths.EnsureCreated();

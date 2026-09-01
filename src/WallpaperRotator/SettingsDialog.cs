@@ -2,6 +2,8 @@ namespace WallpaperRotator;
 
 public sealed class SettingsDialog : Form
 {
+    private readonly ComboBox schedule = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
+    private readonly ComboBox rotationMode = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
     private readonly NumericUpDown intervalHours = Number(1, 576);
     private readonly NumericUpDown minimumWidth = Number(800, 16384);
     private readonly NumericUpDown minimumHeight = Number(600, 8640);
@@ -27,12 +29,16 @@ public sealed class SettingsDialog : Form
     public SettingsDialog(AppConfig config, bool hasApiKey)
     {
         Text = "Настройки Wallpaper Rotator";
-        ClientSize = new Size(590, 540);
+        ClientSize = new Size(610, 580);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
 
+        schedule.Items.AddRange(["Раз в день при запуске/пробуждении", "Каждые N часов"]);
+        schedule.SelectedIndex = (int)config.Schedule;
+        rotationMode.Items.AddRange(["Случайный (Wallhaven + NASA)", "Топ Wallhaven за месяц", "Смешанный топ Wallhaven + NASA"]);
+        rotationMode.SelectedIndex = (int)config.RotationMode;
         intervalHours.Value = config.IntervalHours;
         minimumWidth.Value = config.MinimumWidth;
         minimumHeight.Value = config.MinimumHeight;
@@ -53,6 +59,7 @@ public sealed class SettingsDialog : Form
         nasaQueries.Lines = config.NasaQueries;
 
         var general = FormTable();
+        AddRow(general, "Расписание:", schedule);
         AddRow(general, "Период смены обоев (часов):", intervalHours);
         AddRow(general, "Минимальная ширина (px):", minimumWidth);
         AddRow(general, "Минимальная высота (px):", minimumHeight);
@@ -61,6 +68,7 @@ public sealed class SettingsDialog : Form
         AddRow(general, "Попыток загрузки за смену:", maximumAttempts);
 
         var sources = FormTable();
+        AddRow(sources, "Автоматическая ротация:", rotationMode);
         AddRow(sources, "Вес Wallhaven:", wallhavenWeight);
         AddRow(sources, "Вес NASA:", nasaWeight);
         AddRow(sources, "Категории Wallhaven:", wallhavenCategories);
@@ -92,10 +100,23 @@ public sealed class SettingsDialog : Form
         Controls.Add(buttons);
         AcceptButton = ok;
         CancelButton = cancel;
+
+        void UpdateSourceControls()
+        {
+            var enabled = rotationMode.SelectedIndex != (int)AutomaticRotationMode.WallhavenTop;
+            wallhavenWeight.Enabled = enabled;
+            nasaWeight.Enabled = enabled;
+        }
+        schedule.SelectedIndexChanged += (_, _) => intervalHours.Enabled = schedule.SelectedIndex == (int)RotationSchedule.Interval;
+        rotationMode.SelectedIndexChanged += (_, _) => UpdateSourceControls();
+        intervalHours.Enabled = config.Schedule == RotationSchedule.Interval;
+        UpdateSourceControls();
     }
 
     public void ApplyTo(AppConfig config)
     {
+        config.Schedule = (RotationSchedule)schedule.SelectedIndex;
+        config.RotationMode = (AutomaticRotationMode)rotationMode.SelectedIndex;
         config.IntervalHours = (int)intervalHours.Value;
         config.MinimumWidth = (int)minimumWidth.Value;
         config.MinimumHeight = (int)minimumHeight.Value;

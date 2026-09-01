@@ -11,11 +11,13 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Concurrent config saves remain valid", TestConcurrentConfigSaves),
     ("NASA asset preference", TestNasaAssetSelection),
     ("Wallhaven parsing and recent exclusion", TestWallhaven),
+    ("Wallhaven toplist query and manual batch", TestWallhavenToplist),
     ("Image validation and download", TestImageDownload),
     ("Distinct IDs use distinct wallpaper files", TestImageFilenameCollision),
     ("History retention", TestHistory),
     ("History cleanup stays inside wallpaper directory", TestHistoryCleanupContainment),
-    ("DPAPI secret round-trip", TestSecret)
+    ("DPAPI secret round-trip", TestSecret),
+    ("Daily rotation state and retry", TestDailyRotation)
 };
 var failed = 0;
 foreach (var test in tests)
@@ -32,9 +34,33 @@ static async Task TestConfig()
     var paths = new AppPaths(temp.Path); var store = new ConfigStore(paths, new DiagnosticLog(paths));
     var config = await store.LoadAsync();
     Equal(24, config.IntervalHours); True(File.Exists(paths.Config));
+    Equal(RotationSchedule.Daily, config.Schedule); Equal(AutomaticRotationMode.Random, config.RotationMode);
     config.IntervalHours = -1; config.HistoryLimit = 900; config.WallhavenWeight = 0; config.NasaWeight = 0; config.NsfwOnly = true;
     await store.SaveAsync(config); var loaded = await store.LoadAsync();
     Equal(1, loaded.IntervalHours); Equal(100, loaded.HistoryLimit); True(loaded.WallhavenWeight > 0); True(loaded.NsfwOnly);
+}
+
+static async Task TestWallhavenToplist()
+{
+    const string json = """
+        {"data":[
+        {"id":"one","url":"https://wallhaven.cc/w/one","path":"https://w.wallhaven.cc/one.jpg","dimension_x":4000,"dimension_y":2400,"favorites":42,"thumbs":{"large":"https://th.wallhaven.cc/lg/one.jpg"}},
+        {"id":"two","url":"https://wallhaven.cc/w/two","path":"https://w.wallhaven.cc/two.jpg","dimension_x":4000,"dimension_y":2400,"favorites":7,"thumbs":{"large":"https://th.wallhaven.cc/lg/two.jpg"}},
+        {"id":"portrait","url":"https://wallhaven.cc/w/portrait","path":"https://w.wallhaven.cc/p.jpg","dimension_x":2400,"dimension_y":4000,"favorites":99,"thumbs":{"large":"https://th.wallhaven.cc/lg/p.jpg"}}
+        ]}
+        """;
+    Uri? requestedUri = null;
+    using var http = new HttpClient(new StubHandler(request => { requestedUri = request.RequestUri; return Json(json); }));
+    var provider = new WallhavenProvider(http, () => null, new Random(1));
+    var candidates = await provider.GetCandidatesAsync(
+        new AppConfig { MinimumWidth = 3840, MinimumHeight = 2160, WallhavenQuery = "nature landscape" },
+        new HashSet<string> { "Wallhaven:two" }, 10, WallpaperSortMode.TopMonth, default);
+
+    Equal(1, candidates.Count); Equal("one", candidates[0].Id); Equal(42, candidates[0].Favorites);
+    Equal("https://th.wallhaven.cc/lg/one.jpg", candidates[0].ThumbnailUrl);
+    True(requestedUri!.Query.Contains("sorting=toplist"));
+    True(requestedUri.Query.Contains("topRange=1M"));
+    True(requestedUri.Query.Contains("q=nature%20landscape"));
 }
 
 static async Task TestMalformedConfig()
@@ -53,7 +79,9 @@ static async Task TestConcurrentConfigSaves()
     await Task.WhenAll(saves);
 
     var json = await File.ReadAllTextAsync(paths.Config);
-    var saved = System.Text.Json.JsonSerializer.Deserialize<AppConfig>(json);
+    var jsonOptions = new System.Text.Json.JsonSerializerOptions();
+    jsonOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
+    var saved = System.Text.Json.JsonSerializer.Deserialize<AppConfig>(json, jsonOptions);
     True(saved is not null); True(saved!.IntervalHours is >= 1 and <= 20);
     True(!Directory.EnumerateFiles(paths.Root, "*.tmp").Any());
 }
@@ -138,6 +166,30 @@ static Task TestSecret()
     using var temp = new TempDir(); var paths = new AppPaths(temp.Path); var store = new SecretStore(paths);
     store.Save("top-secret"); Equal("top-secret", store.Load()); True(!Encoding.UTF8.GetString(File.ReadAllBytes(paths.Secret)).Contains("top-secret"));
     store.Delete(); True(store.Load() is null); return Task.CompletedTask;
+}
+
+static async Task TestDailyRotation()
+{
+    using var temp = new TempDir();
+    var paths = new AppPaths(temp.Path);
+    var states = new RotationStateStore(paths, new DiagnosticLog(paths));
+    var now = new DateTime(2026, 9, 1, 8, 0, 0, DateTimeKind.Local);
+    var coordinator = new DailyRotationCoordinator(states, () => now);
+    var calls = 0;
+
+    True(!await coordinator.TryRunAsync(true, _ => { calls++; return Task.FromResult(true); }));
+    Equal(0, calls);
+    True(!await coordinator.TryRunAsync(false, _ => { calls++; return Task.FromResult(false); }));
+    Equal(1, calls);
+    True((await states.LoadAsync()).LastSuccessfulDailyRotation is null);
+    True(await coordinator.TryRunAsync(false, _ => { calls++; return Task.FromResult(true); }));
+    Equal(2, calls);
+    True(!await coordinator.TryRunAsync(false, _ => { calls++; return Task.FromResult(true); }));
+    Equal(2, calls);
+
+    now = now.AddDays(1);
+    True(await coordinator.TryRunAsync(false, _ => { calls++; return Task.FromResult(true); }));
+    Equal(3, calls);
 }
 
 static HttpResponseMessage Json(string json) => new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };

@@ -21,7 +21,8 @@ internal static class Program
         var history = new HistoryStore(paths, log);
         var downloader = new ImageDownloader(http, paths);
         var rotation = new RotationService(providers, downloader, history, configs, log);
-        Application.Run(new TrayApplicationContext(rotation, configs, secrets, paths, log));
+        var dailyRotation = new DailyRotationCoordinator(new RotationStateStore(paths, log), () => DateTime.Now);
+        Application.Run(new TrayApplicationContext(rotation, dailyRotation, configs, secrets, paths, log, http));
         http.Dispose();
     }
 }

@@ -1,4 +1,6 @@
 {
+  "Schedule": "Daily",
+  "RotationMode": "Random",
   "IntervalHours": 24,
   "MinimumWidth": 3840,
   "MinimumHeight": 2160,

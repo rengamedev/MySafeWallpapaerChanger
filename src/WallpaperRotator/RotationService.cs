@@ -19,11 +19,7 @@ public sealed class RotationService(
             var config = await configs.LoadAsync();
             if (selection is not null)
             {
-                config.WallhavenQuery = selection.Query;
-                config.WallhavenCategories = selection.Categories;
-                config.AllowSketchy = false;
-                config.AllowNsfw = selection.ContentMode == WallpaperContentMode.Nsfw;
-                config.NsfwOnly = selection.ContentMode == WallpaperContentMode.Nsfw;
+                ApplySelection(config, selection);
                 await configs.SaveAsync(config);
             }
             var entries = await history.LoadAsync();
@@ -32,22 +28,39 @@ public sealed class RotationService(
             {
                 try
                 {
-                    var provider = ChooseProvider(config);
-                    var candidate = await provider.GetCandidateAsync(config, ids, cancellationToken);
+                    var (provider, sortMode) = ChooseProvider(config);
+                    var candidate = provider is IWallpaperSearchProvider searchProvider
+                        ? (await searchProvider.GetCandidatesAsync(config, ids, 1, sortMode, cancellationToken)).FirstOrDefault()
+                        : await provider.GetCandidateAsync(config, ids, cancellationToken);
                     if (candidate is null) continue;
-                    var downloaded = await downloader.DownloadAsync(candidate, config, cancellationToken);
-                    try { WallpaperService.Set(downloaded.Path); }
-                    catch { try { File.Delete(downloaded.Path); } catch { } throw; }
-                    var entry = new HistoryEntry(candidate.Provider, candidate.Id, candidate.Title, candidate.SourceUrl,
-                        downloaded.Path, candidate.Credit, DateTimeOffset.Now);
-                    await history.AddAsync(entry, config.HistoryLimit);
-                    return entry;
+                    return await InstallCandidateUnsafeAsync(candidate, config, cancellationToken);
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex) { log.Write($"Wallpaper attempt {attempt + 1} failed.", ex); }
             }
             return null;
         }
+        finally { gate.Release(); }
+    }
+
+    public async Task<IReadOnlyList<WallpaperCandidate>> GetManualCandidatesAsync(
+        WallpaperSelection selection,
+        int count = 10,
+        CancellationToken cancellationToken = default)
+    {
+        var config = await configs.LoadAsync();
+        ApplySelection(config, selection);
+        await configs.SaveAsync(config);
+        var entries = await history.LoadAsync();
+        var ids = entries.Select(x => $"{x.Provider}:{x.Id}").ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var provider = providers.OfType<IWallpaperSearchProvider>().First(x => x.Name == "Wallhaven");
+        return await provider.GetCandidatesAsync(config, ids, count, WallpaperSortMode.Random, cancellationToken);
+    }
+
+    public async Task<HistoryEntry?> SetCandidateAsync(WallpaperCandidate candidate, CancellationToken cancellationToken = default)
+    {
+        if (!await gate.WaitAsync(0, cancellationToken)) return null;
+        try { return await InstallCandidateUnsafeAsync(candidate, await configs.LoadAsync(), cancellationToken); }
         finally { gate.Release(); }
     }
 
@@ -59,11 +72,37 @@ public sealed class RotationService(
         return previous;
     }
 
-    private IWallpaperProvider ChooseProvider(AppConfig config)
+    private async Task<HistoryEntry> InstallCandidateUnsafeAsync(WallpaperCandidate candidate, AppConfig config, CancellationToken cancellationToken)
+    {
+        var downloaded = await downloader.DownloadAsync(candidate, config, cancellationToken);
+        try { WallpaperService.Set(downloaded.Path); }
+        catch { try { File.Delete(downloaded.Path); } catch { } throw; }
+        var entry = new HistoryEntry(candidate.Provider, candidate.Id, candidate.Title, candidate.SourceUrl,
+            downloaded.Path, candidate.Credit, DateTimeOffset.Now);
+        await history.AddAsync(entry, config.HistoryLimit);
+        return entry;
+    }
+
+    private static void ApplySelection(AppConfig config, WallpaperSelection selection)
+    {
+        config.WallhavenQuery = selection.Query;
+        config.WallhavenCategories = selection.Categories;
+        config.AllowSketchy = false;
+        config.AllowNsfw = selection.ContentMode == WallpaperContentMode.Nsfw;
+        config.NsfwOnly = selection.ContentMode == WallpaperContentMode.Nsfw;
+    }
+
+    private (IWallpaperProvider Provider, WallpaperSortMode SortMode) ChooseProvider(AppConfig config)
     {
         var wallhaven = providers.First(x => x.Name == "Wallhaven");
         var nasa = providers.First(x => x.Name == "NASA");
-        if (config.NsfwOnly) return wallhaven;
-        return rng.Next(config.WallhavenWeight + config.NasaWeight) < config.WallhavenWeight ? wallhaven : nasa;
+        if (config.NsfwOnly || config.RotationMode == AutomaticRotationMode.WallhavenTop)
+            return (wallhaven, config.RotationMode == AutomaticRotationMode.Random ? WallpaperSortMode.Random : WallpaperSortMode.TopMonth);
+
+        if (config.RotationMode == AutomaticRotationMode.Random)
+            return (rng.Next(config.WallhavenWeight + config.NasaWeight) < config.WallhavenWeight ? wallhaven : nasa, WallpaperSortMode.Random);
+
+        var selected = rng.Next(config.WallhavenWeight + config.NasaWeight) < config.WallhavenWeight ? wallhaven : nasa;
+        return (selected, selected == wallhaven ? WallpaperSortMode.TopMonth : WallpaperSortMode.Random);
     }
 }
