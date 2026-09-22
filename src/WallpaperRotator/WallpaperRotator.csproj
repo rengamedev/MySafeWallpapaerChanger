@@ -14,4 +14,7 @@
     <DebugType>None</DebugType>
     <DebugSymbols>false</DebugSymbols>
   </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="WallpaperRotator.Tests" />
+  </ItemGroup>
 </Project>

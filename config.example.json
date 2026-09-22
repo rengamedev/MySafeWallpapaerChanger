@@ -1,6 +1,8 @@
 {
   "Schedule": "Daily",
   "RotationMode": "Random",
+  "WallpaperStyle": "Fill",
+  "ShowSuccessNotifications": true,
   "IntervalHours": 24,
   "MinimumWidth": 3840,
   "MinimumHeight": 2160,
@@ -14,5 +16,8 @@
   "AllowNsfw": false,
   "NsfwOnly": false,
   "WallhavenQuery": "",
-  "NasaQueries": [ "space", "earth", "nebula", "galaxy", "moon" ]
+  "NasaQueries": [ "space", "earth", "nebula", "galaxy", "moon" ],
+  "ManualQuery": "",
+  "ManualCategories": "111",
+  "ManualContentMode": "Sfw"
 }

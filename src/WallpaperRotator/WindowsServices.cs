@@ -14,16 +14,29 @@ public static class WallpaperService
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool SystemParametersInfo(int action, int param, string value, int flags);
 
-    public static void Set(string path)
+    public static void Set(string path, WallpaperStyle style)
     {
-        using (var key = Registry.CurrentUser.OpenSubKey(@"Control Panel\Desktop", writable: true))
+        if (GetRegistryValues(style) is { } values)
         {
-            key?.SetValue("WallpaperStyle", "10");
-            key?.SetValue("TileWallpaper", "0");
+            using var key = Registry.CurrentUser.OpenSubKey(@"Control Panel\Desktop", writable: true);
+            key?.SetValue("WallpaperStyle", values.WallpaperStyle);
+            key?.SetValue("TileWallpaper", values.TileWallpaper);
         }
         if (!SystemParametersInfo(SpiSetDesktopWallpaper, 0, Path.GetFullPath(path), UpdateIniFile | SendWinIniChange))
             throw new Win32Exception(Marshal.GetLastWin32Error());
     }
+
+    /// <summary>Values of HKCU\Control Panel\Desktop; null keeps the style chosen in Windows settings.</summary>
+    public static (string WallpaperStyle, string TileWallpaper)? GetRegistryValues(WallpaperStyle style) => style switch
+    {
+        WallpaperStyle.Fill => ("10", "0"),
+        WallpaperStyle.Fit => ("6", "0"),
+        WallpaperStyle.Stretch => ("2", "0"),
+        WallpaperStyle.Center => ("0", "0"),
+        WallpaperStyle.Tile => ("0", "1"),
+        WallpaperStyle.Span => ("22", "0"),
+        _ => null
+    };
 }
 
 public static class AutoStartService
@@ -38,8 +51,10 @@ public static class AutoStartService
     }
 }
 
-public sealed class SecretStore(AppPaths paths)
+public sealed class SecretStore(AppPaths paths, DiagnosticLog log)
 {
+    private bool failureLogged;
+
     public void Save(string secret)
     {
         paths.EnsureCreated();
@@ -47,6 +62,7 @@ public sealed class SecretStore(AppPaths paths)
         var input = Encoding.UTF8.GetBytes(secret.Trim());
         var protectedBytes = Protect(input);
         File.WriteAllBytes(paths.Secret, protectedBytes);
+        failureLogged = false;
         CryptographicOperations.ZeroMemory(input);
     }
     public string? Load()
@@ -58,7 +74,13 @@ public sealed class SecretStore(AppPaths paths)
             try { return Encoding.UTF8.GetString(plain); }
             finally { CryptographicOperations.ZeroMemory(plain); }
         }
-        catch { return null; }
+        catch (Exception ex)
+        {
+            // DPAPI fails when the file was copied from another Windows account or computer. Log once, not per request.
+            if (!failureLogged) log.Write("Stored Wallhaven key could not be read; enter it again.", ex);
+            failureLogged = true;
+            return null;
+        }
     }
     public void Delete() { try { if (File.Exists(paths.Secret)) File.Delete(paths.Secret); } catch { } }
 

@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
 
@@ -5,20 +6,58 @@ namespace WallpaperRotator;
 
 public sealed class WallhavenProvider(HttpClient http, Func<string?> apiKey, Random? random = null) : IWallpaperSearchProvider
 {
+    private const int ToplistPages = 5;
     private readonly Random rng = random ?? Random.Shared;
     public string Name => "Wallhaven";
 
-    public async Task<WallpaperCandidate?> GetCandidateAsync(AppConfig config, IReadOnlySet<string> recentIds, CancellationToken cancellationToken)
-        => (await GetCandidatesAsync(config, recentIds, 1, WallpaperSortMode.Random, cancellationToken)).FirstOrDefault();
+    public async Task<WallpaperCandidate?> GetCandidateAsync(AppConfig config, IReadOnlySet<string> excludedIds, CancellationToken cancellationToken)
+    {
+        var candidates = await GetCandidatesAsync(config, excludedIds, 1, WallpaperSortMode.Random, cancellationToken);
+        return candidates.Count > 0 ? candidates[0] : null;
+    }
 
     public async Task<IReadOnlyList<WallpaperCandidate>> GetCandidatesAsync(
         AppConfig config,
-        IReadOnlySet<string> recentIds,
+        IReadOnlySet<string> excludedIds,
         int count,
         WallpaperSortMode sortMode,
         CancellationToken cancellationToken)
     {
         count = Math.Clamp(count, 1, 24);
+        // One toplist page holds only 24 images; a random page keeps the monthly top from running out after a few days.
+        var page = sortMode == WallpaperSortMode.TopMonth ? rng.Next(1, ToplistPages + 1) : 1;
+        var candidates = await SearchAsync(config, excludedIds, count, sortMode, page, cancellationToken);
+        if (candidates.Count == 0 && page > 1)
+            candidates = await SearchAsync(config, excludedIds, count, sortMode, 1, cancellationToken);
+        return candidates;
+    }
+
+    /// <summary>Returns true for a valid key, false for a rejected key and null when Wallhaven could not be reached.</summary>
+    public async Task<bool?> ValidateKeyAsync(string key, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(key)) return false;
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, "https://wallhaven.cc/api/v1/settings");
+            request.Headers.Add("X-API-Key", key.Trim());
+            using var response = await http.SendAsync(request, cancellationToken);
+            if (response.IsSuccessStatusCode) return true;
+            return response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden ? false : null;
+        }
+        catch (Exception ex) when (ex is HttpRequestException || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
+        {
+            return null;
+        }
+    }
+
+    private async Task<IReadOnlyList<WallpaperCandidate>> SearchAsync(
+        AppConfig config,
+        IReadOnlySet<string> excludedIds,
+        int count,
+        WallpaperSortMode sortMode,
+        int page,
+        CancellationToken cancellationToken)
+    {
         var key = apiKey();
         var purity = "100";
         if (!string.IsNullOrEmpty(key))
@@ -31,6 +70,7 @@ public sealed class WallhavenProvider(HttpClient http, Func<string?> apiKey, Ran
             $"q={Uri.EscapeDataString(config.WallhavenQuery)}"
         };
         if (sortMode == WallpaperSortMode.TopMonth) parameters.Add("topRange=1M");
+        if (page > 1) parameters.Add($"page={page}");
         var query = string.Join("&", parameters);
         using var request = new HttpRequestMessage(HttpMethod.Get, $"https://wallhaven.cc/api/v1/search?{query}");
         if (!string.IsNullOrEmpty(key)) request.Headers.Add("X-API-Key", key);
@@ -38,8 +78,8 @@ public sealed class WallhavenProvider(HttpClient http, Func<string?> apiKey, Ran
         response.EnsureSuccessStatusCode();
         var payload = await response.Content.ReadFromJsonAsync<SearchResponse>(cancellationToken: cancellationToken);
         return payload?.Data?
-            .Where(x => x.DimensionX >= config.MinimumWidth && x.DimensionY >= config.MinimumHeight && x.DimensionX >= x.DimensionY)
-            .Where(x => !recentIds.Contains($"Wallhaven:{x.Id}"))
+            .Where(x => ImageRequirements.IsSatisfied(config, x.DimensionX, x.DimensionY))
+            .Where(x => !excludedIds.Contains(WallpaperKeys.Create(Name, x.Id)))
             .DistinctBy(x => x.Id, StringComparer.OrdinalIgnoreCase)
             .OrderBy(_ => rng.Next())
             .Take(count)

@@ -4,6 +4,9 @@ public sealed class SettingsDialog : Form
 {
     private readonly ComboBox schedule = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
     private readonly ComboBox rotationMode = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
+    private readonly ComboBox wallpaperStyle = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
+    private readonly CheckBox showSuccessNotifications = new() { Text = "Уведомлять об успешной смене", AutoSize = true };
+    private readonly CheckBox clearBlocked = new() { AutoSize = true };
     private readonly NumericUpDown intervalHours = Number(1, 576);
     private readonly NumericUpDown minimumWidth = Number(800, 16384);
     private readonly NumericUpDown minimumHeight = Number(600, 8640);
@@ -19,17 +22,34 @@ public sealed class SettingsDialog : Form
     private readonly CheckBox nsfwOnly = new() { Text = "Только NSFW для автоматической смены", AutoSize = true };
     private readonly TextBox nasaQueries = new() { Multiline = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, Height = 125 };
 
-    private static readonly (string Label, string Value)[] Categories =
+    private static readonly (string Label, WallpaperStyle Value)[] Styles =
     [
-        ("Обычные", "100"), ("Аниме", "010"), ("Люди", "001"),
-        ("Обычные + аниме", "110"), ("Обычные + люди", "101"),
-        ("Аниме + люди", "011"), ("Все категории", "111")
+        ("Заполнение", WallpaperStyle.Fill),
+        ("По размеру", WallpaperStyle.Fit),
+        ("Растянуть", WallpaperStyle.Stretch),
+        ("По центру", WallpaperStyle.Center),
+        ("Замостить", WallpaperStyle.Tile),
+        ("Расширение на все мониторы", WallpaperStyle.Span),
+        ("Не менять (как в настройках Windows)", WallpaperStyle.Unchanged)
     ];
 
-    public SettingsDialog(AppConfig config, bool hasApiKey)
+    private static readonly (string Label, string Value)[] Categories =
+    [
+        ("Обычные", "100"),
+        ("Аниме", "010"),
+        ("Люди", "001"),
+        ("Обычные + аниме", "110"),
+        ("Обычные + люди", "101"),
+        ("Аниме + люди", "011"),
+        ("Все категории", "111")
+    ];
+
+    public bool ClearBlocked => clearBlocked.Checked;
+
+    public SettingsDialog(AppConfig config, bool hasApiKey, int blockedCount, (int Width, int Height)? screenSize)
     {
         Text = "Настройки Wallpaper Rotator";
-        ClientSize = new Size(610, 580);
+        ClientSize = new Size(610, 640);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -39,6 +59,11 @@ public sealed class SettingsDialog : Form
         schedule.SelectedIndex = (int)config.Schedule;
         rotationMode.Items.AddRange(["Случайный (Wallhaven + NASA)", "Топ Wallhaven за месяц", "Смешанный топ Wallhaven + NASA"]);
         rotationMode.SelectedIndex = (int)config.RotationMode;
+        wallpaperStyle.Items.AddRange(Styles.Select(x => x.Label).ToArray());
+        wallpaperStyle.SelectedIndex = Math.Max(0, Array.FindIndex(Styles, x => x.Value == config.WallpaperStyle));
+        showSuccessNotifications.Checked = config.ShowSuccessNotifications;
+        clearBlocked.Text = $"Снова показывать скрытые обои ({blockedCount})";
+        clearBlocked.Enabled = blockedCount > 0;
         intervalHours.Value = config.IntervalHours;
         minimumWidth.Value = config.MinimumWidth;
         minimumHeight.Value = config.MinimumHeight;
@@ -63,9 +88,22 @@ public sealed class SettingsDialog : Form
         AddRow(general, "Период смены обоев (часов):", intervalHours);
         AddRow(general, "Минимальная ширина (px):", minimumWidth);
         AddRow(general, "Минимальная высота (px):", minimumHeight);
+        if (screenSize is { } size)
+        {
+            var useScreen = new Button { Text = $"Как у экрана ({Math.Max(size.Width, size.Height)}×{Math.Min(size.Width, size.Height)})", AutoSize = true };
+            useScreen.Click += (_, _) =>
+            {
+                minimumWidth.Value = Math.Clamp(Math.Max(size.Width, size.Height), (int)minimumWidth.Minimum, (int)minimumWidth.Maximum);
+                minimumHeight.Value = Math.Clamp(Math.Min(size.Width, size.Height), (int)minimumHeight.Minimum, (int)minimumHeight.Maximum);
+            };
+            AddRow(general, "", useScreen);
+        }
+        AddRow(general, "Расположение обоев:", wallpaperStyle);
         AddRow(general, "Количество обоев в истории:", historyLimit);
         AddRow(general, "Максимальный размер файла (МБ):", maximumFileMegabytes);
         AddRow(general, "Попыток загрузки за смену:", maximumAttempts);
+        AddRow(general, "Уведомления:", showSuccessNotifications);
+        AddRow(general, "Скрытые обои:", clearBlocked);
 
         var sources = FormTable();
         AddRow(sources, "Автоматическая ротация:", rotationMode);
@@ -117,6 +155,8 @@ public sealed class SettingsDialog : Form
     {
         config.Schedule = (RotationSchedule)schedule.SelectedIndex;
         config.RotationMode = (AutomaticRotationMode)rotationMode.SelectedIndex;
+        config.WallpaperStyle = Styles[wallpaperStyle.SelectedIndex].Value;
+        config.ShowSuccessNotifications = showSuccessNotifications.Checked;
         config.IntervalHours = (int)intervalHours.Value;
         config.MinimumWidth = (int)minimumWidth.Value;
         config.MinimumHeight = (int)minimumHeight.Value;
@@ -136,7 +176,10 @@ public sealed class SettingsDialog : Form
 
     private static NumericUpDown Number(int minimum, int maximum) => new()
     {
-        Minimum = minimum, Maximum = maximum, Width = 150, ThousandsSeparator = true
+        Minimum = minimum,
+        Maximum = maximum,
+        Width = 150,
+        ThousandsSeparator = true
     };
 
     private static TableLayoutPanel FormTable() => new()
