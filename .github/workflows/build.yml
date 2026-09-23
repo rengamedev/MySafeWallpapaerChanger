@@ -1,0 +1,86 @@
+name: Build
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore WallpaperRotator.sln
+
+      - name: Check formatting
+        run: dotnet format whitespace --folder --verify-no-changes
+
+      - name: Build
+        run: dotnet build WallpaperRotator.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test WallpaperRotator.sln -c Release --no-build --logger trx --results-directory TestResults
+
+      - name: Verify the app has no package dependencies
+        shell: pwsh
+        run: |
+          $packages = dotnet list src/WallpaperRotator/WallpaperRotator.csproj package --include-transitive
+          if ($packages | Select-String '^\s*>') {
+            $packages
+            throw 'WallpaperRotator must not reference NuGet packages.'
+          }
+
+      - name: Publish
+        run: >
+          dotnet publish src/WallpaperRotator/WallpaperRotator.csproj -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o outputs/WallpaperRotator-win-x64
+
+      - name: Write checksum and build info
+        shell: pwsh
+        run: |
+          $output = 'outputs/WallpaperRotator-win-x64'
+          $hash = (Get-FileHash "$output/WallpaperRotator.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  WallpaperRotator.exe" | Out-File -Encoding ascii "$output/SHA256SUMS.txt"
+          @("Commit: $env:GITHUB_SHA", ".NET SDK: $(dotnet --version)") | Out-File -Encoding ascii "$output/build-info.txt"
+          "SHA-256: $hash" >> $env:GITHUB_STEP_SUMMARY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WallpaperRotator-win-x64
+          path: outputs/WallpaperRotator-win-x64
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: TestResults
+          if-no-files-found: ignore
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: WallpaperRotator-win-x64
+          path: dist
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes

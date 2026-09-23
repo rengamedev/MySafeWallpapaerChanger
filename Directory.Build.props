@@ -1,0 +1,14 @@
+<Project>
+  <PropertyGroup>
+    <Version>1.1.0</Version>
+    <Deterministic>true</Deterministic>
+    <!-- Built-in .NET analyzers; no NuGet packages are needed. The level is pinned so a newer SDK does not add warnings. -->
+    <AnalysisLevel>8.0-recommended</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <!-- Normalizes source paths embedded in the binary so builds from different folders produce the same bytes. -->
+  <PropertyGroup Condition="'$(GITHUB_ACTIONS)' == 'true'">
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+</Project>

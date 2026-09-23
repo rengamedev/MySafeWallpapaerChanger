@@ -6,6 +6,7 @@ public sealed class AppPaths
     {
         Root = root ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WallpaperRotator");
         Wallpapers = Path.Combine(Root, "wallpapers");
+        Favorites = Path.Combine(Root, "favorites");
         Config = Path.Combine(Root, "config.json");
         History = Path.Combine(Root, "history.json");
         State = Path.Combine(Root, "state.json");
@@ -15,10 +16,17 @@ public sealed class AppPaths
 
     public string Root { get; }
     public string Wallpapers { get; }
+    public string Favorites { get; }
     public string Config { get; }
     public string History { get; }
     public string State { get; }
     public string Secret { get; }
     public string Log { get; }
-    public void EnsureCreated() { Directory.CreateDirectory(Root); Directory.CreateDirectory(Wallpapers); }
+
+    public void EnsureCreated()
+    {
+        Directory.CreateDirectory(Root);
+        Directory.CreateDirectory(Wallpapers);
+        Directory.CreateDirectory(Favorites);
+    }
 }

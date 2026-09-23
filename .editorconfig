@@ -1,0 +1,26 @@
+root = true
+
+[*]
+charset = utf-8
+insert_final_newline = true
+indent_style = space
+indent_size = 4
+trim_trailing_whitespace = true
+
+[*.{csproj,props,targets,json,yml,yaml,manifest,config}]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.cs]
+file_header_template = unset
+csharp_style_namespace_declarations = file_scoped:warning
+csharp_prefer_braces = when_multiline:suggestion
+dotnet_sort_system_directives_first = true
+
+# File-scoped namespaces are enforced in the build (EnforceCodeStyleInBuild).
+dotnet_diagnostic.IDE0161.severity = warning
+
+# The SemaphoreSlim gates never allocate a wait handle and live for the whole process, so there is nothing to dispose.
+dotnet_diagnostic.CA1001.severity = none

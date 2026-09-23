@@ -31,30 +31,37 @@ public sealed class WallpaperSelectionDialog : Form
 
     public WallpaperSelectionDialog(bool hasWallhavenKey, AppConfig config)
     {
-        Text = "Выбор новых обоев"; Width = 480; Height = 390; StartPosition = FormStartPosition.CenterScreen;
-        FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false;
+        Text = "Выбор новых обоев";
+        Width = 480;
+        Height = 390;
+        StartPosition = FormStartPosition.CenterScreen;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MaximizeBox = false;
+        MinimizeBox = false;
         theme.Items.AddRange(Themes.Select(x => x.Name).ToArray());
         theme.SelectedIndexChanged += (_, _) =>
         {
             var selected = Themes[theme.SelectedIndex];
             query.Enabled = theme.SelectedIndex == Themes.Length - 1;
-            query.Text = query.Enabled ? config.WallhavenQuery : selected.Query;
+            query.Text = query.Enabled ? config.ManualQuery : selected.Query;
             if (query.Enabled) query.Focus();
         };
-        var savedTheme = Array.FindIndex(Themes, x => x.Query == config.WallhavenQuery && x.Categories == config.WallhavenCategories);
+        var savedTheme = Array.FindIndex(Themes, x => x.Query == config.ManualQuery && x.Categories == config.ManualCategories);
         theme.SelectedIndex = savedTheme >= 0 ? savedTheme : Themes.Length - 1;
         nsfw.Enabled = hasWallhavenKey;
-        nsfw.Checked = hasWallhavenKey && config.NsfwOnly;
+        nsfw.Checked = hasWallhavenKey && config.ManualContentMode == WallpaperContentMode.Nsfw;
         sfw.Checked = !nsfw.Checked;
 
         var content = new GroupBox { Text = "Тип контента", Width = 420, Height = 92 };
         var contentPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false };
-        contentPanel.Controls.AddRange([sfw, nsfw]); content.Controls.Add(contentPanel);
+        contentPanel.Controls.AddRange([sfw, nsfw]);
+        content.Controls.Add(contentPanel);
         var note = new Label
         {
             Text = hasWallhavenKey ? "NSFW запрашивается отдельно и не смешивается с SFW."
                 : "Для NSFW сначала добавьте API-ключ Wallhaven в меню приложения.",
-            AutoSize = true, MaximumSize = new Size(420, 0),
+            AutoSize = true,
+            MaximumSize = new Size(420, 0),
             ForeColor = hasWallhavenKey ? SystemColors.ControlText : Color.DarkRed
         };
         var ok = new Button { Text = "Сменить обои", DialogResult = DialogResult.OK, AutoSize = true };
@@ -62,8 +69,16 @@ public sealed class WallpaperSelectionDialog : Form
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, FlowDirection = FlowDirection.RightToLeft, Height = 42, Padding = new Padding(6) };
         buttons.Controls.AddRange([cancel, ok]);
         var panel = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, Padding = new Padding(12), WrapContents = false };
-        panel.Controls.AddRange([new Label { Text = "Тема:", AutoSize = true }, theme,
-            new Label { Text = "Поисковый запрос:", AutoSize = true }, query, content, note]);
-        Controls.Add(panel); Controls.Add(buttons); AcceptButton = ok; CancelButton = cancel;
+        panel.Controls.AddRange([
+            new Label { Text = "Тема:", AutoSize = true },
+            theme,
+            new Label { Text = "Поисковый запрос:", AutoSize = true },
+            query,
+            content,
+            note]);
+        Controls.Add(panel);
+        Controls.Add(buttons);
+        AcceptButton = ok;
+        CancelButton = cancel;
     }
 }
