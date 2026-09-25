@@ -12,6 +12,7 @@ public sealed class RotationServiceTests : IDisposable
     private readonly ConfigStore configs;
     private readonly HttpClient http = new(new StubHandler(_ => throw new InvalidOperationException("No download expected.")));
     private readonly List<string> applied = [];
+    private readonly List<WallpaperStyle> appliedStyles = [];
     private readonly List<TimeSpan> delays = [];
 
     public RotationServiceTests()
@@ -31,7 +32,7 @@ public sealed class RotationServiceTests : IDisposable
 
     private RotationService Create(FakeProvider wallhaven, FakeProvider? nasa = null, Random? random = null) =>
         new(wallhaven, nasa ?? new FakeProvider("NASA", (_, _) => null), new ImageDownloader(http, paths), history, states, configs, log,
-            (path, _) => applied.Add(path), random,
+            (path, style) => { applied.Add(path); appliedStyles.Add(style); }, random,
             (delay, _) => { delays.Add(delay); return Task.CompletedTask; });
 
     private async Task SaveConfig(Action<AppConfig> change)
@@ -63,6 +64,17 @@ public sealed class RotationServiceTests : IDisposable
         var wallhaven = service.ChooseProvider(new AppConfig { RotationMode = mode, WallhavenWeight = 1, NasaWeight = 0 });
         Assert.Equal("Wallhaven", wallhaven.Provider.Name);
         Assert.Equal(wallhavenSort, wallhaven.SortMode);
+    }
+
+    [Theory]
+    [InlineData(AutomaticRotationMode.Random, WallpaperSortMode.Random)]
+    [InlineData(AutomaticRotationMode.Mixed, WallpaperSortMode.TopMonth)]
+    public void PanoramaUsesOnlyWallhaven(AutomaticRotationMode mode, WallpaperSortMode sort)
+    {
+        var service = Create(new FakeProvider("Wallhaven", (_, _) => null));
+        var choice = service.ChooseProvider(new AppConfig { RotationMode = mode, Panorama = true, WallhavenWeight = 0, NasaWeight = 1 });
+        Assert.Equal("Wallhaven", choice.Provider.Name);
+        Assert.Equal(sort, choice.SortMode);
     }
 
     [Fact]
@@ -149,5 +161,22 @@ public sealed class RotationServiceTests : IDisposable
         Assert.Equal("0", (await service.SetPreviousAsync())?.Id);
         Assert.Null(await service.SetPreviousAsync());
         Assert.Equal([Path.Combine(paths.Wallpapers, "2.jpg"), Path.Combine(paths.Wallpapers, "0.jpg")], applied);
+    }
+
+    [WindowsFact]
+    public async Task PreviousInPanoramaSpansOnlyPanoramicImages()
+    {
+        await SaveConfig(c => { c.Panorama = true; c.WallpaperStyle = WallpaperStyle.Fill; });
+        foreach (var (id, width, height) in new[] { ("wide", 3200, 900), ("normal", 1600, 900), ("newest", 1600, 900) })
+        {
+            var file = Path.Combine(paths.Wallpapers, $"{id}.png");
+            using (var bitmap = new System.Drawing.Bitmap(width, height)) bitmap.Save(file, System.Drawing.Imaging.ImageFormat.Png);
+            await history.AddAsync(new HistoryEntry("Wallhaven", id, "t", "https://wallhaven.cc", file, null, DateTimeOffset.Now), 10);
+        }
+        var service = Create(new FakeProvider("Wallhaven", (_, _) => null));
+
+        Assert.Equal("normal", (await service.SetPreviousAsync())?.Id);
+        Assert.Equal("wide", (await service.SetPreviousAsync())?.Id);
+        Assert.Equal([WallpaperStyle.Fill, WallpaperStyle.Span], appliedStyles);
     }
 }

@@ -91,6 +91,21 @@ public sealed class ImageDownloader(HttpClient http, AppPaths paths, TimeSpan? s
         }
     }
 
+    /// <summary>Reads only the size of an image already on disk; null when it is missing or unreadable.</summary>
+    public static (int Width, int Height)? TryReadSize(string file)
+    {
+        try
+        {
+            using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var image = Image.FromStream(stream, useEmbeddedColorManagement: false, validateImageData: false);
+            return (image.Width, image.Height);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or ExternalException or OutOfMemoryException)
+        {
+            return null;
+        }
+    }
+
     private static void DeleteQuietly(string path)
     {
         try { File.Delete(path); } catch { /* A leftover temp file is removed by the startup cleanup. */ }

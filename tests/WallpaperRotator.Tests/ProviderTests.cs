@@ -118,6 +118,43 @@ public class ProviderTests
         Assert.DoesNotContain("page=", query);
     }
 
+    [Fact]
+    public async Task WallhavenPanoramaRequestsDesktopShapeAndUncroppedThumbnails()
+    {
+        const string json = """
+            {"data":[
+            {"id":"wide","url":"https://wallhaven.cc/w/wide","path":"https://w.wallhaven.cc/wide.jpg","dimension_x":7680,"dimension_y":2160,"thumbs":{"large":"https://th.wallhaven.cc/lg/wide.jpg","original":"https://th.wallhaven.cc/orig/wide.jpg"}},
+            {"id":"eightk","url":"https://wallhaven.cc/w/eightk","path":"https://w.wallhaven.cc/eightk.jpg","dimension_x":7680,"dimension_y":4320}
+            ]}
+            """;
+        var handler = new StubHandler(_ => Http.Json(json));
+        using var http = new HttpClient(handler);
+        var provider = new WallhavenProvider(http, () => null, new Random(1));
+        var config = new AppConfig { Panorama = true, PanoramaWidth = 7680, PanoramaHeight = 2160, MinimumWidth = 3840, MinimumHeight = 2160 };
+
+        var candidates = await provider.GetCandidatesAsync(config, new HashSet<string>(), 10, WallpaperSortMode.TopMonth, default);
+
+        Assert.Equal("wide", Assert.Single(candidates).Id);
+        Assert.Equal("https://th.wallhaven.cc/orig/wide.jpg", candidates[0].ThumbnailUrl);
+        var query = handler.Requests[0].RequestUri!.Query;
+        Assert.Contains("atleast=7680x2160", query);
+        Assert.Contains("ratios=32x9", query);
+        Assert.Contains("sorting=favorites", query);
+        Assert.DoesNotContain("topRange", query);
+    }
+
+    [Theory]
+    [InlineData(7680, 2160, "32x9")]
+    [InlineData(5120, 1440, "32x9")]
+    [InlineData(3440, 1440, "21x9")]
+    [InlineData(11520, 2160, "48x9")]
+    [InlineData(6400, 2160, null)]
+    public void WallhavenPanoramaRatioMatchesDesktopShape(int width, int height, string? expected)
+    {
+        Assert.Equal(expected, WallhavenProvider.GetPanoramaRatio(new AppConfig { Panorama = true, PanoramaWidth = width, PanoramaHeight = height }));
+        Assert.Null(WallhavenProvider.GetPanoramaRatio(new AppConfig { PanoramaWidth = width, PanoramaHeight = height }));
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.OK, true)]
     [InlineData(HttpStatusCode.Unauthorized, false)]

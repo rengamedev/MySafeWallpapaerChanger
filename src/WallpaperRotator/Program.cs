@@ -48,4 +48,8 @@ internal static class Program
 
     internal static (int Width, int Height)? PrimaryScreenSize() =>
         Screen.PrimaryScreen?.Bounds is { Width: > 0, Height: > 0 } bounds ? (bounds.Width, bounds.Height) : null;
+
+    /// <summary>The rectangle around all monitors, which is the area a spanned wallpaper covers.</summary>
+    internal static (int Width, int Height)? DesktopSize() =>
+        SystemInformation.VirtualScreen is { Width: > 0, Height: > 0 } bounds ? (bounds.Width, bounds.Height) : null;
 }

@@ -186,14 +186,18 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         var config = await services.Configs.LoadAsync();
         var state = await services.States.LoadAsync();
-        var previousStyle = config.WallpaperStyle;
-        using var dialog = new SettingsDialog(config, !string.IsNullOrEmpty(services.Secrets.Load()), state.BlockedIds.Count, Program.PrimaryScreenSize());
+        var previous = config.Clone();
+        using var dialog = new SettingsDialog(config, !string.IsNullOrEmpty(services.Secrets.Load()), state.BlockedIds.Count,
+            Program.PrimaryScreenSize(), Program.DesktopSize());
         if (dialog.ShowDialog() != DialogResult.OK) return;
         dialog.ApplyTo(config);
         await services.Configs.SaveAsync(config);
         if (dialog.ClearBlocked) await services.States.UpdateAsync(s => s.BlockedIds.Clear());
-        if (config.WallpaperStyle != previousStyle && current is not null && File.Exists(current.FilePath))
-            WallpaperService.Set(current.FilePath, config.WallpaperStyle);
+        if (current is not null && File.Exists(current.FilePath))
+        {
+            var size = ImageDownloader.TryReadSize(current.FilePath);
+            if (config.StyleFor(size) != previous.StyleFor(size)) WallpaperService.Set(current.FilePath, config.StyleFor(size));
+        }
         Show("Настройки сохранены.", ToolTipIcon.Info);
         await ApplyScheduleAsync(notifyFailure: true);
     }
