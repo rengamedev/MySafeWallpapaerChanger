@@ -1,0 +1,85 @@
+name: auto-merge
+
+# Сливает PR владельца (только squash), как только на нём зелёным закончился
+# workflow `tests`, чья job `tests` — обязательная проверка ruleset'а, и
+# удаляет ветку PR. Ручной `gh pr merge` не нужен ни человеку, ни агенту;
+# придержать PR — держать его в draft.
+#
+# Штатный авто-мерж на `pull_request: opened` не годится: GitHub включает его
+# только на PR, который ещё нельзя слить, а на docs-only PR `tests` зеленеет
+# за секунды и обгоняет вызов (PR #18: «Pull request is in unstable status»,
+# PR остался зелёным и неслитым). К завершению `tests` проверка уже готова,
+# гонки нет.
+#
+# Слияние от GITHUB_TOKEN не запускает других workflow и не удаляет ветку
+# настройкой «Automatically delete head branches» (ветки PR #11–#17 так и
+# остались на GitHub), поэтому ветку удаляет `--delete-branch`.
+#
+# `workflow_run` исполняет версию этого файла из ветки по умолчанию: правка
+# на своём же PR не запускается и действует только после слияния. Код PR
+# здесь не checkout'ится и не исполняется, поля события попадают в скрипт
+# только через env. Появится обязательная проверка из другого workflow —
+# допиши его в `workflows:`, иначе PR, где она закончится последней, никто
+# не сольёт.
+on:
+  workflow_run:
+    workflows: [tests]
+    types: [completed]
+
+permissions:
+  contents: write       # squash-коммит в ветку по умолчанию и удаление ветки PR
+  pull-requests: write  # слияние PR
+  # gh pr checks читает check runs, commit statuses и workflow run каждой
+  # проверки; без actions: read его запрос падает на checkSuite.workflowRun.
+  checks: read
+  statuses: read
+  actions: read
+
+jobs:
+  merge:
+    # Runner занимают только успешные прогоны по PR из этого же репозитория:
+    # расписание, кнопка, падения, отмены и форки отсекаются здесь.
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Squash-merge green owner PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          PR_NUMBERS: ${{ join(github.event.workflow_run.pull_requests.*.number, ' ') }}
+        run: |
+          for number in $PR_NUMBERS; do
+            # Открытый не-draft PR владельца в ветку по умолчанию, чья голова —
+            # ровно тот коммит, на котором прошёл `tests`.
+            verdict=$(gh pr view "$number" \
+              --json state,isDraft,author,baseRefName,headRefOid --jq '
+              if .state == "OPEN" and (.isDraft | not) and .author.login == env.OWNER
+                and .baseRefName == env.DEFAULT_BRANCH and .headRefOid == env.HEAD_SHA
+              then "ok"
+              else {state, isDraft, author: .author.login, baseRefName, headRefOid} | tojson
+              end')
+            if [ "$verdict" != ok ]; then
+              echo "PR #$number skipped: $verdict"
+              continue
+            fi
+            # Каждая обязательная проверка — pass: skipped, pending и fail не
+            # проходят. Если gh не может их прочитать (нет прав или в ruleset
+            # не осталось обязательных проверок), шаг падает, а не сливает.
+            verdict=$(gh pr checks "$number" --required --json name,bucket --jq '
+              if length > 0 and all(.bucket == "pass")
+              then "ok"
+              else map("\(.name)=\(.bucket)") | join(" ")
+              end')
+            if [ "$verdict" != ok ]; then
+              echo "PR #$number skipped, required checks: $verdict"
+              continue
+            fi
+            gh pr merge "$number" --squash --delete-branch --match-head-commit "$HEAD_SHA"
+          done

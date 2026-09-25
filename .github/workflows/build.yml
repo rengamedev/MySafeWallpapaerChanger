@@ -1,10 +1,10 @@
 name: Build
 
+# Сборка EXE и релиз. Проверка PR — в tests.yml; здесь только теги v* и
+# кнопка Run workflow, чтобы не тратить Windows-минуты дважды.
 on:
   push:
-    branches: [master]
     tags: ['v*']
-  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -14,9 +14,9 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: global.json
 
@@ -55,13 +55,13 @@ jobs:
           @("Commit: $env:GITHUB_SHA", ".NET SDK: $(dotnet --version)") | Out-File -Encoding ascii "$output/build-info.txt"
           "SHA-256: $hash" >> $env:GITHUB_STEP_SUMMARY
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: WallpaperRotator-win-x64
           path: outputs/WallpaperRotator-win-x64
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: test-results
@@ -75,7 +75,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: WallpaperRotator-win-x64
           path: dist
