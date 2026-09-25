@@ -14,6 +14,11 @@ public sealed class AppConfig
     public int IntervalHours { get; set; } = 24;
     public int MinimumWidth { get; set; } = 3840;
     public int MinimumHeight { get; set; } = 2160;
+
+    // One image across all monitors: Windows "Span" style and only images shaped like the whole desktop.
+    public bool Panorama { get; set; }
+    public int PanoramaWidth { get; set; } = 7680;
+    public int PanoramaHeight { get; set; } = 2160;
     public int HistoryLimit { get; set; } = 10;
     public int MaximumFileMegabytes { get; set; } = 25;
     public int MaximumAttempts { get; set; } = 5;
@@ -41,6 +46,9 @@ public sealed class AppConfig
         IntervalHours = Math.Clamp(IntervalHours, 1, 24 * 24);
         MinimumWidth = Math.Clamp(MinimumWidth, 800, 16384);
         MinimumHeight = Math.Clamp(MinimumHeight, 600, 8640);
+        PanoramaWidth = Math.Clamp(PanoramaWidth, 1600, 32768);
+        PanoramaHeight = Math.Clamp(PanoramaHeight, 600, 8640);
+        if (PanoramaHeight > PanoramaWidth) (PanoramaWidth, PanoramaHeight) = (PanoramaHeight, PanoramaWidth);
         HistoryLimit = Math.Clamp(HistoryLimit, 1, 100);
         MaximumFileMegabytes = Math.Clamp(MaximumFileMegabytes, 1, 100);
         MaximumAttempts = Math.Clamp(MaximumAttempts, 1, 10);
@@ -53,6 +61,21 @@ public sealed class AppConfig
         if (NasaQueries.Length == 0) NasaQueries = ["space"];
         WallhavenQuery = (WallhavenQuery ?? "").Trim();
         ManualQuery = (ManualQuery ?? "").Trim();
+    }
+
+    [JsonIgnore] public int RequiredWidth => Panorama ? PanoramaWidth : MinimumWidth;
+    [JsonIgnore] public int RequiredHeight => Panorama ? PanoramaHeight : MinimumHeight;
+
+    /// <summary>
+    /// Span only for an image shaped like the desktop, so an ordinary image from history is not cropped to a strip.
+    /// An image of unknown size gets the style the current mode would install.
+    /// </summary>
+    public WallpaperStyle StyleFor((int Width, int Height)? size)
+    {
+        if (!Panorama) return WallpaperStyle;
+        return size is not { } s || ImageRequirements.IsNearAspect(s.Width, s.Height, (double)PanoramaWidth / PanoramaHeight)
+            ? WallpaperStyle.Span
+            : WallpaperStyle;
     }
 
     public AppConfig Clone()

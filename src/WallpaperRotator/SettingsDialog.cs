@@ -5,6 +5,9 @@ public sealed class SettingsDialog : Form
     private readonly ComboBox schedule = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
     private readonly ComboBox rotationMode = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
     private readonly ComboBox wallpaperStyle = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
+    private readonly CheckBox panorama = new() { Text = "Одна картинка на все мониторы", AutoSize = true };
+    private readonly NumericUpDown panoramaWidth = Number(1600, 32768, 90);
+    private readonly NumericUpDown panoramaHeight = Number(600, 8640, 90);
     private readonly CheckBox showSuccessNotifications = new() { Text = "Уведомлять об успешной смене", AutoSize = true };
     private readonly CheckBox clearBlocked = new() { AutoSize = true };
     private readonly NumericUpDown intervalHours = Number(1, 576);
@@ -46,10 +49,11 @@ public sealed class SettingsDialog : Form
 
     public bool ClearBlocked => clearBlocked.Checked;
 
-    public SettingsDialog(AppConfig config, bool hasApiKey, int blockedCount, (int Width, int Height)? screenSize)
+    public SettingsDialog(
+        AppConfig config, bool hasApiKey, int blockedCount, (int Width, int Height)? screenSize, (int Width, int Height)? desktopSize)
     {
         Text = "Настройки Wallpaper Rotator";
-        ClientSize = new Size(610, 640);
+        ClientSize = new Size(610, 760);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -61,6 +65,9 @@ public sealed class SettingsDialog : Form
         rotationMode.SelectedIndex = (int)config.RotationMode;
         wallpaperStyle.Items.AddRange(Styles.Select(x => x.Label).ToArray());
         wallpaperStyle.SelectedIndex = Math.Max(0, Array.FindIndex(Styles, x => x.Value == config.WallpaperStyle));
+        panorama.Checked = config.Panorama;
+        panoramaWidth.Value = config.PanoramaWidth;
+        panoramaHeight.Value = config.PanoramaHeight;
         showSuccessNotifications.Checked = config.ShowSuccessNotifications;
         clearBlocked.Text = $"Снова показывать скрытые обои ({blockedCount})";
         clearBlocked.Enabled = blockedCount > 0;
@@ -88,9 +95,10 @@ public sealed class SettingsDialog : Form
         AddRow(general, "Период смены обоев (часов):", intervalHours);
         AddRow(general, "Минимальная ширина (px):", minimumWidth);
         AddRow(general, "Минимальная высота (px):", minimumHeight);
+        Button? useScreen = null;
         if (screenSize is { } size)
         {
-            var useScreen = new Button { Text = $"Как у экрана ({Math.Max(size.Width, size.Height)}×{Math.Min(size.Width, size.Height)})", AutoSize = true };
+            useScreen = new Button { Text = $"Как у экрана ({Math.Max(size.Width, size.Height)}×{Math.Min(size.Width, size.Height)})", AutoSize = true };
             useScreen.Click += (_, _) =>
             {
                 minimumWidth.Value = Math.Clamp(Math.Max(size.Width, size.Height), (int)minimumWidth.Minimum, (int)minimumWidth.Maximum);
@@ -99,6 +107,34 @@ public sealed class SettingsDialog : Form
             AddRow(general, "", useScreen);
         }
         AddRow(general, "Расположение обоев:", wallpaperStyle);
+        AddRow(general, "Панорама:", panorama);
+        var panoramaSize = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
+        panoramaSize.Controls.AddRange([panoramaWidth, new Label { Text = "×", AutoSize = true, Margin = new Padding(3, 6, 3, 0) }, panoramaHeight]);
+        AddRow(general, "Размер панорамы (px):", panoramaSize);
+        Button? useDesktop = null;
+        // Only side-by-side monitors form a landscape panorama; a vertical stack has no matching wallpapers.
+        if (desktopSize is { } desktop && desktop.Width > desktop.Height)
+        {
+            useDesktop = new Button { Text = $"Как у рабочего стола ({desktop.Width}×{desktop.Height})", AutoSize = true };
+            useDesktop.Click += (_, _) =>
+            {
+                panoramaWidth.Value = Math.Clamp(desktop.Width, (int)panoramaWidth.Minimum, (int)panoramaWidth.Maximum);
+                panoramaHeight.Value = Math.Clamp(desktop.Height, (int)panoramaHeight.Minimum, (int)panoramaHeight.Maximum);
+            };
+            AddRow(general, "", useDesktop);
+        }
+        var panoramaHint = new Label
+        {
+            Text = "Одно изображение растягивается на все мониторы; подходят только обои с пропорциями всего рабочего стола " +
+                "(два 4K рядом — 7680×2160, 32:9). Источник — только Wallhaven.",
+            AutoSize = true,
+            MaximumSize = new Size(560, 0),
+            ForeColor = SystemColors.GrayText,
+            Margin = new Padding(3, 0, 3, 8)
+        };
+        general.Controls.Add(panoramaHint, 0, general.RowCount);
+        general.SetColumnSpan(panoramaHint, 2);
+        general.RowCount++;
         AddRow(general, "Количество обоев в истории:", historyLimit);
         AddRow(general, "Максимальный размер файла (МБ):", maximumFileMegabytes);
         AddRow(general, "Попыток загрузки за смену:", maximumAttempts);
@@ -139,16 +175,23 @@ public sealed class SettingsDialog : Form
         AcceptButton = ok;
         CancelButton = cancel;
 
-        void UpdateSourceControls()
+        void UpdateControls()
         {
-            var enabled = rotationMode.SelectedIndex != (int)AutomaticRotationMode.WallhavenTop;
+            // Panoramas come only from Wallhaven, so its weights do not apply either.
+            var enabled = rotationMode.SelectedIndex != (int)AutomaticRotationMode.WallhavenTop && !panorama.Checked;
             wallhavenWeight.Enabled = enabled;
             nasaWeight.Enabled = enabled;
+            wallpaperStyle.Enabled = !panorama.Checked;
+            minimumWidth.Enabled = minimumHeight.Enabled = !panorama.Checked;
+            if (useScreen is not null) useScreen.Enabled = !panorama.Checked;
+            panoramaWidth.Enabled = panoramaHeight.Enabled = panorama.Checked;
+            if (useDesktop is not null) useDesktop.Enabled = panorama.Checked;
         }
         schedule.SelectedIndexChanged += (_, _) => intervalHours.Enabled = schedule.SelectedIndex == (int)RotationSchedule.Interval;
-        rotationMode.SelectedIndexChanged += (_, _) => UpdateSourceControls();
+        rotationMode.SelectedIndexChanged += (_, _) => UpdateControls();
+        panorama.CheckedChanged += (_, _) => UpdateControls();
         intervalHours.Enabled = config.Schedule == RotationSchedule.Interval;
-        UpdateSourceControls();
+        UpdateControls();
     }
 
     public void ApplyTo(AppConfig config)
@@ -160,6 +203,9 @@ public sealed class SettingsDialog : Form
         config.IntervalHours = (int)intervalHours.Value;
         config.MinimumWidth = (int)minimumWidth.Value;
         config.MinimumHeight = (int)minimumHeight.Value;
+        config.Panorama = panorama.Checked;
+        config.PanoramaWidth = (int)panoramaWidth.Value;
+        config.PanoramaHeight = (int)panoramaHeight.Value;
         config.HistoryLimit = (int)historyLimit.Value;
         config.MaximumFileMegabytes = (int)maximumFileMegabytes.Value;
         config.MaximumAttempts = (int)maximumAttempts.Value;
@@ -174,11 +220,11 @@ public sealed class SettingsDialog : Form
         config.Normalize();
     }
 
-    private static NumericUpDown Number(int minimum, int maximum) => new()
+    private static NumericUpDown Number(int minimum, int maximum, int width = 150) => new()
     {
         Minimum = minimum,
         Maximum = maximum,
-        Width = 150,
+        Width = width,
         ThousandsSeparator = true
     };
 

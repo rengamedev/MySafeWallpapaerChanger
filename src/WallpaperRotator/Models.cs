@@ -52,6 +52,13 @@ public static class WallpaperKeys
 
 public static class ImageRequirements
 {
+    /// <summary>A panorama may differ from the desktop shape by this fraction; Span crops the excess at the edges.</summary>
+    public const double PanoramaAspectTolerance = 0.05;
+
     public static bool IsSatisfied(AppConfig config, int width, int height) =>
-        width >= config.MinimumWidth && height >= config.MinimumHeight && width >= height;
+        width >= config.RequiredWidth && height >= config.RequiredHeight && width >= height &&
+        (!config.Panorama || IsNearAspect(width, height, (double)config.PanoramaWidth / config.PanoramaHeight));
+
+    public static bool IsNearAspect(int width, int height, double aspect) =>
+        height > 0 && Math.Abs((double)width / height / aspect - 1) <= PanoramaAspectTolerance;
 }

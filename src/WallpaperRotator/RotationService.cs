@@ -84,7 +84,7 @@ public sealed class RotationService(
             for (var position = historyPosition + 1; position < entries.Count; position++)
             {
                 if (!File.Exists(entries[position].FilePath)) continue;
-                apply(entries[position].FilePath, config.WallpaperStyle);
+                apply(entries[position].FilePath, config.StyleFor(ImageDownloader.TryReadSize(entries[position].FilePath)));
                 historyPosition = position;
                 return entries[position];
             }
@@ -113,7 +113,7 @@ public sealed class RotationService(
     private async Task<HistoryEntry> InstallCandidateUnsafeAsync(WallpaperCandidate candidate, AppConfig config, CancellationToken cancellationToken)
     {
         var downloaded = await downloader.DownloadAsync(candidate, config, cancellationToken);
-        try { apply(downloaded.Path, config.WallpaperStyle); }
+        try { apply(downloaded.Path, config.StyleFor((downloaded.Width, downloaded.Height))); }
         catch
         {
             try { File.Delete(downloaded.Path); } catch { /* The startup cleanup removes it later. */ }
@@ -134,7 +134,8 @@ public sealed class RotationService(
 
     internal (IWallpaperProvider Provider, WallpaperSortMode SortMode) ChooseProvider(AppConfig config)
     {
-        if (config.NsfwOnly || config.RotationMode == AutomaticRotationMode.WallhavenTop)
+        // NASA has almost no photos shaped like a multi-monitor desktop.
+        if (config.NsfwOnly || config.Panorama || config.RotationMode == AutomaticRotationMode.WallhavenTop)
             return (wallhaven, config.RotationMode == AutomaticRotationMode.Random ? WallpaperSortMode.Random : WallpaperSortMode.TopMonth);
 
         var useWallhaven = rng.Next(config.WallhavenWeight + config.NasaWeight) < config.WallhavenWeight;

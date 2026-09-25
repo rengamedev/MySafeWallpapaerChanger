@@ -111,4 +111,26 @@ public class ConfigTests
         Assert.True(config.AllowSketchy);
         Assert.False(config.NsfwOnly);
     }
+
+    [Theory]
+    [InlineData(7680, 2160, true, WallpaperStyle.Span)]
+    [InlineData(10240, 2880, true, WallpaperStyle.Span)]
+    [InlineData(7680, 4320, false, WallpaperStyle.Fill)]
+    [InlineData(5120, 1440, false, WallpaperStyle.Span)] // Right shape, only too small to download.
+    public void PanoramaRequiresDesktopShapeAndSize(int width, int height, bool satisfied, WallpaperStyle style)
+    {
+        var config = new AppConfig { Panorama = true, PanoramaWidth = 7680, PanoramaHeight = 2160 };
+        Assert.Equal(satisfied, ImageRequirements.IsSatisfied(config, width, height));
+        Assert.Equal(style, config.StyleFor((width, height)));
+    }
+
+    [Fact]
+    public void PanoramaSizeIsNormalizedToLandscape()
+    {
+        var config = new AppConfig { PanoramaWidth = 2160, PanoramaHeight = 7680, WallpaperStyle = WallpaperStyle.Fit };
+        config.Normalize();
+        Assert.Equal((7680, 2160), (config.PanoramaWidth, config.PanoramaHeight));
+        Assert.Equal(WallpaperStyle.Fit, config.StyleFor((7680, 2160)));
+        Assert.Equal((config.MinimumWidth, config.MinimumHeight), (config.RequiredWidth, config.RequiredHeight));
+    }
 }
