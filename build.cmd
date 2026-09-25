@@ -2,6 +2,16 @@
 setlocal
 pushd "%~dp0"
 
+rem A running copy locks the EXE and publish fails at the very end, so check it up front.
+set "EXE=outputs\WallpaperRotator-win-x64\WallpaperRotator.exe"
+if exist "%EXE%" (
+  2>nul (>>"%EXE%" call ) || (
+    echo %EXE% is in use, most likely Wallpaper Rotator is running.
+    echo Exit it from the tray icon and run build.cmd again.
+    goto :failed
+  )
+)
+
 echo Restoring dependencies...
 dotnet restore WallpaperRotator.sln
 if errorlevel 1 goto :failed
@@ -27,7 +37,9 @@ if errorlevel 1 goto :failed
 echo.
 echo Build completed successfully.
 echo EXE: %CD%\outputs\WallpaperRotator-win-x64\WallpaperRotator.exe
-powershell -NoProfile -Command "(Get-FileHash 'outputs\WallpaperRotator-win-x64\WallpaperRotator.exe' -Algorithm SHA256).Hash.ToLowerInvariant()"
+rem PSModulePath inherited from PowerShell 7 hides Get-FileHash from Windows PowerShell.
+set "PSModulePath="
+powershell -NoProfile -Command "(Get-FileHash '%EXE%' -Algorithm SHA256).Hash.ToLowerInvariant()"
 goto :finish
 
 :failed
