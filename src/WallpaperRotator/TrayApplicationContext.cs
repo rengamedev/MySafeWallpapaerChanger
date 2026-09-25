@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using Microsoft.Win32;
 
 namespace WallpaperRotator;
@@ -19,17 +20,20 @@ public sealed class TrayApplicationContext : ApplicationContext
 {
     private const string AppName = "Wallpaper Rotator";
     private static readonly TimeSpan OrphanMinimumAge = TimeSpan.FromHours(1);
+    private static readonly CultureInfo Russian = CultureInfo.GetCultureInfo("ru-RU");
 
     private readonly TrayServices services;
     private readonly NotifyIcon tray;
     private readonly SynchronizationContext uiContext;
     private readonly System.Windows.Forms.Timer intervalTimer = new();
     private readonly System.Windows.Forms.Timer dailyTimer = new() { Interval = (int)RotationTiming.DailyCheckInterval.TotalMilliseconds };
-    private readonly ToolStripMenuItem cancelItem;
-    private readonly ToolStripMenuItem pauseItem;
-    private readonly ToolStripMenuItem autoStartItem;
+    private readonly TrayMenu menu;
     private CancellationTokenSource? operation;
     private HistoryEntry? current;
+    private string? status;
+    private bool paused;
+    private RotationSchedule? schedule;
+    private DateTimeOffset? nextIntervalRotation;
     private bool intervalFailureReported;
     private bool exiting;
 
@@ -37,30 +41,25 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         this.services = services;
         uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
-        var menu = new ContextMenuStrip();
-        menu.Items.Add("Выбрать и сменить обои…", null, (_, _) => Run(ChooseAndRotateAsync));
-        menu.Items.Add("Следующие обои", null, (_, _) => Run(RotateManuallyAsync));
-        menu.Items.Add("Предыдущие обои", null, (_, _) => Run(PreviousAsync));
-        cancelItem = new ToolStripMenuItem("Отменить загрузку", null, (_, _) => operation?.Cancel()) { Enabled = false };
-        menu.Items.Add(cancelItem);
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Открыть страницу источника", null, (_, _) => OpenUrl(current?.SourceUrl));
-        menu.Items.Add("Добавить в избранное", null, (_, _) => AddCurrentToFavorites());
-        menu.Items.Add("Больше не показывать эти обои", null, (_, _) => Run(BlockCurrentAsync));
-        menu.Items.Add("Открыть папку с обоями", null, (_, _) => OpenPath(services.Paths.Wallpapers));
-        menu.Items.Add("Открыть избранное", null, (_, _) => OpenPath(services.Paths.Favorites));
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Настройки…", null, (_, _) => Run(ConfigureSettingsAsync));
-        menu.Items.Add("Ключ и контент Wallhaven…", null, (_, _) => Run(ConfigureKeyAsync));
-        menu.Items.Add(new ToolStripSeparator());
-        autoStartItem = new ToolStripMenuItem("Запускать вместе с Windows", null, ToggleAutoStart) { Checked = AutoStartService.IsEnabled() };
-        pauseItem = new ToolStripMenuItem("Пауза автоматической смены", null, (_, _) => Run(TogglePauseAsync));
-        menu.Items.Add(autoStartItem);
-        menu.Items.Add(pauseItem);
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Выход", null, (_, _) => ExitThread());
         var appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
-        tray = new NotifyIcon { Icon = appIcon, Text = AppName, Visible = true, ContextMenuStrip = menu };
+        menu = new TrayMenu(new TrayMenuActions(
+            Choose: () => Run(ChooseAndRotateAsync),
+            Next: () => Run(RotateManuallyAsync),
+            Previous: () => Run(PreviousAsync),
+            Cancel: () => operation?.Cancel(),
+            OpenSource: () => OpenUrl(current?.SourceUrl),
+            AddToFavorites: AddCurrentToFavorites,
+            Block: () => Run(BlockCurrentAsync),
+            OpenWallpapers: () => OpenPath(services.Paths.Wallpapers),
+            OpenFavorites: () => OpenPath(services.Paths.Favorites),
+            OpenLog: () => OpenPath(services.Paths.Log),
+            TogglePause: () => Run(TogglePauseAsync),
+            Settings: () => Run(ConfigureSettingsAsync),
+            Wallhaven: () => Run(ConfigureKeyAsync),
+            ToggleAutoStart: ToggleAutoStart,
+            Exit: ExitThread), HeaderImage());
+        menu.Strip.Opening += (_, _) => menu.Update(MenuState());
+        tray = new NotifyIcon { Icon = appIcon, Text = AppName, Visible = true, ContextMenuStrip = menu.Strip };
         tray.DoubleClick += (_, _) => Run(ChooseAndRotateAsync);
         intervalTimer.Tick += (_, _) => Run(RunIntervalRotationAsync);
         dailyTimer.Tick += (_, _) => Run(() => TryDailyRotationAsync(notifyFailure: false));
@@ -70,6 +69,41 @@ public sealed class TrayApplicationContext : ApplicationContext
     }
 
     private bool Busy => operation is not null;
+
+    /// <summary>The small frame of the EXE icon; the associated icon is 32 px only and blurs when shrunk.</summary>
+    private static Bitmap? HeaderImage()
+    {
+        using var icon = Icon.ExtractIcon(Application.ExecutablePath, 0, SystemInformation.SmallIconSize.Width);
+        return icon?.ToBitmap();
+    }
+
+    private TrayMenuState MenuState() => new(
+        current?.Title,
+        HttpsUri(current?.SourceUrl) is not null,
+        DescribeSchedule(),
+        Busy,
+        paused,
+        AutoStartService.IsEnabled());
+
+    private string DescribeSchedule()
+    {
+        if (status is not null) return char.ToUpperInvariant(status[0]) + status[1..];
+        if (paused) return "Автосмена на паузе";
+        return schedule switch
+        {
+            RotationSchedule.Daily => "Автосмена раз в день",
+            RotationSchedule.Interval when nextIntervalRotation is { } next => next.Date == DateTimeOffset.Now.Date
+                ? $"Следующая смена в {next:HH:mm}"
+                : string.Create(Russian, $"Следующая смена {next:d MMMM} в {next:HH:mm}"),
+            _ => "Автосмена включена"
+        };
+    }
+
+    /// <summary>Keeps an open menu in sync when an operation starts or ends underneath it.</summary>
+    private void RefreshMenu()
+    {
+        if (!exiting && menu.Strip.Visible) menu.Update(MenuState());
+    }
 
     private async Task InitializeAsync()
     {
@@ -198,12 +232,11 @@ public sealed class TrayApplicationContext : ApplicationContext
         await ApplyScheduleAsync(notifyFailure: true);
     }
 
-    private void ToggleAutoStart(object? sender, EventArgs e)
+    private void ToggleAutoStart()
     {
         try
         {
-            AutoStartService.SetEnabled(!autoStartItem.Checked);
-            autoStartItem.Checked = AutoStartService.IsEnabled();
+            AutoStartService.SetEnabled(!AutoStartService.IsEnabled());
         }
         catch (Exception ex)
         {
@@ -214,15 +247,18 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private async Task TogglePauseAsync()
     {
-        pauseItem.Checked = !pauseItem.Checked;
+        paused = !paused;
+        Show(paused ? "Автоматическая смена приостановлена." : "Автоматическая смена возобновлена.", ToolTipIcon.Info);
         await ApplyScheduleAsync(notifyFailure: true);
     }
 
     private async Task ApplyScheduleAsync(bool notifyFailure)
     {
         intervalTimer.Stop();
-        if (pauseItem.Checked) return;
+        nextIntervalRotation = null;
+        if (paused) return;
         var config = await services.Configs.LoadAsync();
+        schedule = config.Schedule;
         if (config.Schedule == RotationSchedule.Daily)
         {
             await TryDailyRotationAsync(notifyFailure);
@@ -238,13 +274,14 @@ public sealed class TrayApplicationContext : ApplicationContext
         intervalTimer.Stop();
         intervalTimer.Interval = (int)Math.Clamp(delay.TotalMilliseconds, 1000, int.MaxValue);
         intervalTimer.Start();
+        nextIntervalRotation = DateTimeOffset.Now.AddMilliseconds(intervalTimer.Interval);
     }
 
     private async Task RunIntervalRotationAsync()
     {
         intervalTimer.Stop();
         var config = await services.Configs.LoadAsync();
-        if (pauseItem.Checked || config.Schedule != RotationSchedule.Interval) return;
+        if (paused || config.Schedule != RotationSchedule.Interval) return;
         if (!TryBeginOperation("автоматическая смена…", out var token))
         {
             StartIntervalTimer(RotationTiming.RetryDelay);
@@ -262,15 +299,15 @@ public sealed class TrayApplicationContext : ApplicationContext
         catch (Exception ex) { services.Log.Write("Unexpected interval rotation error.", ex); }
         finally { EndOperation(); }
         if (succeeded) await ApplyScheduleAsync(notifyFailure: false);
-        else if (!pauseItem.Checked) StartIntervalTimer(RotationTiming.RetryDelay);
+        else if (!paused) StartIntervalTimer(RotationTiming.RetryDelay);
     }
 
     private async Task TryDailyRotationAsync(bool notifyFailure)
     {
-        if (pauseItem.Checked || Busy) return;
+        if (paused || Busy) return;
         var config = await services.Configs.LoadAsync();
         if (config.Schedule != RotationSchedule.Daily) return;
-        await services.DailyRotation.TryRunAsync(pauseItem.Checked, async _ =>
+        await services.DailyRotation.TryRunAsync(paused, async _ =>
         {
             if (!TryBeginOperation("ежедневная смена…", out var token)) return false;
             try
@@ -305,14 +342,14 @@ public sealed class TrayApplicationContext : ApplicationContext
         if ((await services.Configs.LoadAsync()).ShowSuccessNotifications) Show($"Установлено: {changed.Title}", ToolTipIcon.Info);
     }
 
-    private bool TryBeginOperation(string status, out CancellationToken token)
+    private bool TryBeginOperation(string description, out CancellationToken token)
     {
         token = default;
         if (Busy) return false;
         operation = new CancellationTokenSource();
         token = operation.Token;
-        cancelItem.Enabled = true;
-        SetStatus(status);
+        SetStatus(description);
+        RefreshMenu();
         return true;
     }
 
@@ -320,13 +357,14 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         operation?.Dispose();
         operation = null;
-        cancelItem.Enabled = false;
         SetStatus(null);
+        RefreshMenu();
     }
 
-    private void SetStatus(string? status)
+    private void SetStatus(string? text)
     {
-        if (!exiting) tray.Text = status is null ? AppName : $"{AppName} — {status}";
+        status = text;
+        if (!exiting) tray.Text = text is null ? AppName : $"{AppName} — {text}";
     }
 
     private void ShowCancelled() => Show("Загрузка отменена. Текущий фон сохранён.", ToolTipIcon.Info);
@@ -354,9 +392,11 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void OpenUrl(string? url)
     {
-        if (!string.IsNullOrWhiteSpace(url) && Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps)
-            OpenPath(uri.AbsoluteUri);
+        if (HttpsUri(url) is { } uri) OpenPath(uri.AbsoluteUri);
     }
+
+    private static Uri? HttpsUri(string? url) =>
+        !string.IsNullOrWhiteSpace(url) && Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps ? uri : null;
 
     private void OpenPath(string path)
     {
@@ -385,6 +425,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         dailyTimer.Dispose();
         tray.Visible = false;
         tray.Dispose();
+        menu.Dispose();
         base.ExitThreadCore();
     }
 }
