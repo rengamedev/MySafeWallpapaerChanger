@@ -3,3 +3,5 @@ obj/
 .vs/
 outputs/*
 !outputs/**/.gitkeep
+
+.claude/worktrees/

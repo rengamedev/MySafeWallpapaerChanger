@@ -1,0 +1,37 @@
+# Расписание обновления зависимостей.
+#
+# Без этого файла новая мажорка экшена приезжает молча: подвижная метка вроде
+# @v7 продолжает работать, а предупреждение видно только в аннотациях прогона.
+# Поэтому каждый `uses:` закреплён полным SHA коммита, версия живёт в
+# комментарии рядом, и Dependabot переписывает обе половины вместе.
+#
+# Минорные и патч-апдейты сведены в один PR, чтобы мажорка приходила отдельно и
+# была заметна в списке.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      actions-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  # NuGet-пакеты есть только у тестового проекта (xUnit); в EXE они не попадают.
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      nuget-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch

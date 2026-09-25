@@ -41,7 +41,7 @@ Get-FileHash outputs/WallpaperRotator-win-x64/WallpaperRotator.exe -Algorithm SH
 
 ### Непрерывная интеграция и релизы
 
-GitHub Actions (`.github/workflows/build.yml`) на каждый push и pull request собирает решение на `windows-latest`, запускает тесты, проверяет отсутствие NuGet-зависимостей и публикует EXE как артефакт вместе с `SHA256SUMS.txt` и `build-info.txt` (коммит и версия SDK). Тег вида `v1.2.3` дополнительно создаёт GitHub Release с этими файлами.
+`.github/workflows/tests.yml` на каждом pull request собирает решение на Ubuntu, проверяет форматирование и отсутствие NuGet-зависимостей; тесты на Windows идут раз в сутки и по кнопке Run workflow. Зелёный PR сливается сам (`auto-merge.yml`). `.github/workflows/build.yml` по тегу вида `v1.2.3` (или по кнопке) собирает решение на `windows-latest`, запускает тесты, публикует EXE как артефакт вместе с `SHA256SUMS.txt` и `build-info.txt` (коммит и версия SDK) и создаёт GitHub Release с этими файлами.
 
 Чтобы сверить хэш со своей сборкой, используйте ту же версию SDK, что указана в `build-info.txt`, и флаг `-p:ContinuousIntegrationBuild=true` (его уже передаёт `build.cmd`).
 

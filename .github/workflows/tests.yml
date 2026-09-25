@@ -1,0 +1,102 @@
+name: tests
+
+# Единая схема CI для всех репозиториев rengamedev:
+#   * каждый PR получает быстрый прогон на Ubuntu (тариф ×1, минуты не жжём);
+#   * полный прогон на Windows идёт раз в сутки по расписанию на ветке по умолчанию
+#     и по кнопке Run workflow, а не на каждый PR.
+#
+# Приложение и тесты нацелены на net8.0-windows (WinForms), поэтому на Ubuntu
+# тесты не запускаются: job `tests` только собирает решение
+# (EnableWindowsTargeting) и проверяет форматирование и отсутствие NuGet-пакетов.
+# Сами тесты идут в job `windows`.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+# Workflow только читает репозиторий.
+permissions:
+  contents: read
+
+# Новый push в тот же PR делает прежний результат бесполезным. Освобождаем
+# runner сразу, а не дожидаемся полного прогона устаревшего коммита.
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  tests:
+    # Required check ruleset'а ветки по умолчанию. Пока PR является draft, каждый
+    # synchronize создаёт только бесплатную skipped-проверку; ready_for_review
+    # запустит настоящий прогон того же SHA.
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Detect non-documentation changes
+        id: filter
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if git diff --name-only "$BASE_SHA" "$HEAD_SHA" | grep -v '\.md$' -q; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        if: steps.filter.outputs.code == 'true'
+        with:
+          global-json-file: global.json
+      - name: Restore
+        if: steps.filter.outputs.code == 'true'
+        run: dotnet restore WallpaperRotator.sln -p:EnableWindowsTargeting=true
+      - name: Check formatting
+        if: steps.filter.outputs.code == 'true'
+        run: dotnet format whitespace --folder --verify-no-changes
+      - name: Build
+        if: steps.filter.outputs.code == 'true'
+        run: dotnet build WallpaperRotator.sln -c Release --no-restore -p:EnableWindowsTargeting=true
+      - name: Verify the app has no package dependencies
+        if: steps.filter.outputs.code == 'true'
+        shell: pwsh
+        run: |
+          $packages = dotnet list src/WallpaperRotator/WallpaperRotator.csproj package --include-transitive
+          if ($packages | Select-String '^\s*>') {
+            $packages
+            throw 'WallpaperRotator must not reference NuGet packages.'
+          }
+
+  windows:
+    # Проект Windows-only: тесты идут раз в сутки и по кнопке. Минута Windows
+    # стоит две.
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      - name: Restore
+        run: dotnet restore WallpaperRotator.sln
+      - name: Build
+        run: dotnet build WallpaperRotator.sln -c Release --no-restore
+      - name: Test
+        run: dotnet test WallpaperRotator.sln -c Release --no-build --logger trx --results-directory TestResults
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: test-results
+          path: TestResults
+          if-no-files-found: ignore
